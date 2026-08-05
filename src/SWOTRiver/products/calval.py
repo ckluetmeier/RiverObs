@@ -347,8 +347,9 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
         ['azimuth_index', {'dtype': 'i4'}],
         ['range_index', {'dtype': 'i4'}],
         ['pixel_area', {'dtype': 'f8'}],
-        #['geolocation_qual', {'dtype': 'u4'}],
-        #['classificaiton_qual', {'dtype': 'u4'}],
+        ['geolocation_qual', {'dtype': 'u4'}],
+        ['classification_qual', {'dtype': 'u4'}],
+        ['sig0_qual', {'dtype': 'u4'}],
         ['water_frac', {'dtype': 'f8'}],
         ])
     for name, reference in VARIABLES.items():
@@ -529,12 +530,8 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
         Converter for a rasterized water mask derived from airborne imagery.
  
         Expects a single-band GeoTIFF on a regular grid in any projected CRS
-        with meter units (e.g. EPSG:32606, UTM 6N), where cells equal to
-        `water_value` are water and everything else is not. Intended input is a
-        manually digitized water-mask polygon burned to a grid at a spacing far
-        finer than SWOT's ~22 m posting but coarse enough that the resulting
-        pixel cloud is tractable (3-5 m is a reasonable range; see the
-        rasterization step in the protocol).
+        with metre units (e.g. EPSG:32606, UTM 6N), where cells equal to
+        `water_value` are water and everything else is not.
  
         Every water cell becomes one pixel-cloud record carrying the grid's own
         cell area, so node area is sum(pixel_area) over the cells RiverObs
@@ -546,27 +543,14 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
         which makes SWOTRiverEstimator's connected-component segmentation
         operate on the water mask's own 2D grid.
  
-        Heights are set to zero: this converter is for area/width validation
-        only. Do not read wse from a RiverTile produced this way.
+        Heights are zero and the quality flags are all-good: this converter is
+        for area and width validation only. Do not read wse or slope from a
+        RiverTile produced this way.
  
-        Parameters
-        ----------
-        water_mask_file : str
-            Path to the single-band GeoTIFF water mask.
-        water_value : int, default 1
-            Cell value marking water.
-        class_value : int, default 4
-            Classification code written to the pixel cloud. Must match the
-            `class_list` entry in the RDF config passed to calval2rivertile.py.
-            4 is SWOT's interior-water code.
- 
-        Notes
-        -----
         Adapted from from_cnes_watermask() with two corrections:
-          1. the CRS is read from the file rather than hard-coded, and
+          1. the CRS is read from the file rather than hard-coded to EPSG:32610,
           2. rasterio.transform.xy() returns flat sequences for 2D row/col
-             input, so the coordinate arrays are reshaped to the raster shape
-             before boolean masking.
+             input, so the coordinate arrays are reshaped before masking.
         """
         import rasterio
         from pyproj import Transformer
@@ -580,8 +564,7 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
             arr = src.read(1)
             nrow, ncol = arr.shape
  
-            # Transformer target EPSG:4326 is lat-lon axis order, so transform()
-            # returns (lat, lon) -- same convention as from_cnes_watermask.
+            # EPSG:4326 is lat-lon axis order, so transform() returns (lat, lon)
             transformer = Transformer.from_crs(src.crs, "EPSG:4326")
  
             cols, rows = np.meshgrid(np.arange(ncol), np.arange(nrow))
@@ -591,6 +574,7 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
             lats, lons = transformer.transform(xs, ys)
  
             pixel_area = abs(src.transform[0] * src.transform[4])
+            crs_str = str(src.crs)
  
         mask = (arr == water_value)
         npix = int(mask.sum())
@@ -611,16 +595,18 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
         klass.range_index = range_index[mask]
         klass.azimuth_index = azimuth_index[mask]
         klass.pixel_area = np.full(npix, pixel_area)
+        klass.geolocation_qual = np.zeros(npix, dtype='u4')
+        klass.classification_qual = np.zeros(npix, dtype='u4')
+        klass.sig0_qual = np.zeros(npix, dtype='u4')
         klass.interferogram_size_azimuth = nrow
         klass.interferogram_size_range = ncol
  
         LOGGER.info(
             "from_airborne_imagery: %d water cells, %.4f m2 per cell, "
             "%.1f m2 total, CRS %s", npix, pixel_area,
-            npix * pixel_area, src.crs)
+            npix * pixel_area, crs_str)
  
         return klass
-
     @classmethod
     def from_prior_water_mask(cls, water_mask_file):
         """convert prior water prob into a simple pixel cloud"""

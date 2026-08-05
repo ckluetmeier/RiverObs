@@ -78,6 +78,9 @@ def main():
 
     elif args.format == 'water_mask':
         pixc_simple = SimplePixelCloud.from_cnes_watermask(args.input_file)
+ 
+    elif args.format == 'airborne_watermask':
+        pixc_simple = SimplePixelCloud.from_airborne_imagery(args.input_file)
 
     elif args.format == 'airborne_watermask':
         pixc_simple = SimplePixelCloud.from_airborne_imagery(args.input_file)
