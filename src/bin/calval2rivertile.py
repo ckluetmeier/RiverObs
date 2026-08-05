@@ -22,7 +22,7 @@ from SWOTRiver.errors import RiverObsException
 LOGGER = logging.getLogger('calval2rivertile')
 
 FORMATS = ['simple_pixc', 'drifter', 'geotiff', 'pt', 'water_mask',
-        'prior_water_mask']
+        'prior_water_mask', 'airborne_watermask']
 
 def main():
     """Sample script for running calval data through RiverObs"""
@@ -78,6 +78,9 @@ def main():
 
     elif args.format == 'water_mask':
         pixc_simple = SimplePixelCloud.from_cnes_watermask(args.input_file)
+
+    elif args.format == 'airborne_watermask':
+        pixc_simple = SimplePixelCloud.from_airborne_imagery(args.input_file)
 
     elif args.format == 'simple_pixc':
         pixc_simple = SimplePixelCloud.from_ncfile(args.input_file)

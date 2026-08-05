@@ -523,11 +523,104 @@ class SimplePixelCloud(RiverNCProductMixIn, Product):
         return klass
 
     @classmethod
-    def from_airborne_imagery(cls, water_mask_file):
-        """TODO: implement converter"""
-        raise NotImplementedError(
-            "SimplePixelCloud.from_airborne_imagery not implemented!")
-    #
+    def from_airborne_imagery(cls, water_mask_file, water_value=1,
+                              class_value=4):
+        """
+        Converter for a rasterized water mask derived from airborne imagery.
+ 
+        Expects a single-band GeoTIFF on a regular grid in any projected CRS
+        with meter units (e.g. EPSG:32606, UTM 6N), where cells equal to
+        `water_value` are water and everything else is not. Intended input is a
+        manually digitized water-mask polygon burned to a grid at a spacing far
+        finer than SWOT's ~22 m posting but coarse enough that the resulting
+        pixel cloud is tractable (3-5 m is a reasonable range; see the
+        rasterization step in the protocol).
+ 
+        Every water cell becomes one pixel-cloud record carrying the grid's own
+        cell area, so node area is sum(pixel_area) over the cells RiverObs
+        assigns to that node, and node width is that area divided by the SWORD
+        prior node_length -- the same definition the operational processor uses
+        for RiverSP (RiverNode.width_area).
+ 
+        `range_index` and `azimuth_index` are set to the raster column and row,
+        which makes SWOTRiverEstimator's connected-component segmentation
+        operate on the water mask's own 2D grid.
+ 
+        Heights are set to zero: this converter is for area/width validation
+        only. Do not read wse from a RiverTile produced this way.
+ 
+        Parameters
+        ----------
+        water_mask_file : str
+            Path to the single-band GeoTIFF water mask.
+        water_value : int, default 1
+            Cell value marking water.
+        class_value : int, default 4
+            Classification code written to the pixel cloud. Must match the
+            `class_list` entry in the RDF config passed to calval2rivertile.py.
+            4 is SWOT's interior-water code.
+ 
+        Notes
+        -----
+        Adapted from from_cnes_watermask() with two corrections:
+          1. the CRS is read from the file rather than hard-coded, and
+          2. rasterio.transform.xy() returns flat sequences for 2D row/col
+             input, so the coordinate arrays are reshaped to the raster shape
+             before boolean masking.
+        """
+        import rasterio
+        from pyproj import Transformer
+ 
+        with rasterio.open(water_mask_file) as src:
+            if src.crs is None:
+                raise ValueError(
+                    "water mask {} has no CRS; RiverObs needs georeferenced "
+                    "input".format(water_mask_file))
+ 
+            arr = src.read(1)
+            nrow, ncol = arr.shape
+ 
+            # Transformer target EPSG:4326 is lat-lon axis order, so transform()
+            # returns (lat, lon) -- same convention as from_cnes_watermask.
+            transformer = Transformer.from_crs(src.crs, "EPSG:4326")
+ 
+            cols, rows = np.meshgrid(np.arange(ncol), np.arange(nrow))
+            xs, ys = rasterio.transform.xy(src.transform, rows, cols)
+            xs = np.asarray(xs).reshape(nrow, ncol)
+            ys = np.asarray(ys).reshape(nrow, ncol)
+            lats, lons = transformer.transform(xs, ys)
+ 
+            pixel_area = abs(src.transform[0] * src.transform[4])
+ 
+        mask = (arr == water_value)
+        npix = int(mask.sum())
+        if npix == 0:
+            raise ValueError(
+                "no cells equal to water_value={} in {}".format(
+                    water_value, water_mask_file))
+ 
+        range_index, azimuth_index = np.meshgrid(
+            np.arange(ncol, dtype=int), np.arange(nrow, dtype=int))
+ 
+        klass = cls()
+        klass.classification = np.full(npix, class_value, dtype='u1')
+        klass.water_frac = np.ones(npix)
+        klass.latitude = lats[mask]
+        klass.longitude = lons[mask]
+        klass.height = np.zeros(npix)
+        klass.range_index = range_index[mask]
+        klass.azimuth_index = azimuth_index[mask]
+        klass.pixel_area = np.full(npix, pixel_area)
+        klass.interferogram_size_azimuth = nrow
+        klass.interferogram_size_range = ncol
+ 
+        LOGGER.info(
+            "from_airborne_imagery: %d water cells, %.4f m2 per cell, "
+            "%.1f m2 total, CRS %s", npix, pixel_area,
+            npix * pixel_area, src.crs)
+ 
+        return klass
+
     @classmethod
     def from_prior_water_mask(cls, water_mask_file):
         """convert prior water prob into a simple pixel cloud"""
